@@ -1,0 +1,39 @@
+# Ignore build and devel folders
+/build/
+/devel/
+/install/
+
+# Ignore logs
+/log/
+/log/*
+
+# Ignore any CMake generated files
+CMakeFiles/
+/CMakeCache.txt
+cmake_install.cmake
+
+# Ignore other automatically generated files
+compile_commands.json
+Makefile
+.env
+*.swp
+*.pyc
+*.pyo
+*.log
+*.bak
+
+# Ignore user-specific config files
+.vscode/
+.idea/
+*.DS_Store
+
+# Ignore ROS bag files (optional, if you're working with bags)
+*.bag
+*.bag.active
+
+# Ignore catkin configuration files
+.catkin_workspace
+.catkin_tools/
+
+# Ignore Python virtual environments (if you're using one)
+venv/
