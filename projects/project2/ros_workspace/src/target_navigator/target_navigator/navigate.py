@@ -10,8 +10,9 @@ from geometry_msgs.msg import Twist, Pose2D
 
 
 class RobotAction(enum.Enum):
-    ROTATE = 0
-    MOVE = 1
+    IDLE = 0
+    ROTATE = 1
+    MOVE = 2
     
 class Navigate(Node):
     def __init__(self):
@@ -26,11 +27,12 @@ class Navigate(Node):
         self.route = None
         self.completed = False
         self.robot_current_state = None
-        self.state = 'idle'
+        self.state = RobotAction.IDLE
 
         # Declare parameters
         self.declare_parameter('method', 'default')
-        self.declare_parameter('t_tol', 0.1)
+        self.declare_parameter('t_tol', 0.001)
+        self.declare_parameter('d_tol', 0.1)
 
         self.get_logger().info('Navigate node has been initialized')
 
@@ -38,6 +40,7 @@ class Navigate(Node):
         self.method = self.get_parameter('method').value
         assert self.method in ['default', 'approx']
         self.theta_tolerance = self.get_parameter('t_tol').get_parameter_value().double_value
+        self.distance_tolerance = self.get_parameter('d_tol').get_parameter_value().double_value
 
         self.reset_simulation()
 
@@ -130,11 +133,11 @@ class Navigate(Node):
         if not self.route or self.robot_current_state is None:
             return
         
-        if self.state == 'idle':
+        if self.state == RobotAction.IDLE:
             self.target = self.route[0]
-            self.state = 'rotate'            
+            self.state = RobotAction.ROTATE           
         
-        elif self.state == 'rotate':
+        elif self.state == RobotAction.ROTATE:
             x, y, theta = self.robot_current_state
             angle = np.arctan2(self.target[1] - y, self.target[0] - x)
             
@@ -143,21 +146,21 @@ class Navigate(Node):
             
             angle = route1 if abs(route1) < abs(route2) else route2
             
-            if abs(angle) < 0.001:
+            if abs(angle) < self.theta_tolerance:
                 self.cmd_vel_pub.publish(Twist())
-                self.state = 'move'
+                self.state = RobotAction.MOVE
             else:
                 msg = Twist()
                 msg.angular.z = angle
                 self.cmd_vel_pub.publish(msg)
         
-        elif self.state == 'move':
+        elif self.state == RobotAction.MOVE:
             x, y, theta = self.robot_current_state
             self.distance = np.sqrt((self.target[0] - x) ** 2 + (self.target[1] - y) ** 2)
             
-            if self.distance < 0.1:
+            if self.distance < self.distance_tolerance:
                 self.cmd_vel_pub.publish(Twist())
-                self.state = 'idle'
+                self.state = RobotAction.IDLE
                 self.target = None
                 self.distance = 0
                 self.dist_left = None
