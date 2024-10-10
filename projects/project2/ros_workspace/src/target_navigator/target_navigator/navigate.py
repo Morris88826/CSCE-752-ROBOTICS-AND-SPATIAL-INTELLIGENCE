@@ -2,10 +2,12 @@
 import rclpy
 import enum
 import numpy as np
+from collections import deque
 from rclpy.node import Node
 from std_srvs.srv import Empty
 from sensor_msgs.msg import PointCloud
 from geometry_msgs.msg import Twist, Pose2D
+
 
 class RobotAction(enum.Enum):
     ROTATE = 0
@@ -18,12 +20,13 @@ class Navigate(Node):
         self.robot_pose_sub = self.create_subscription(Pose2D, '/pose', self.robot_pose_callback, 10) # Subscriber: (message type, topic name, callback function, queue size)
         self.target_sub = self.create_subscription(PointCloud, '/unvisited_targets', self.unvisited_targets_callback, 10)
         self.get_logger().info('Navigate node has been started')
-        self.create_timer(0.1, self.run)
+        self.create_timer(0.1, self.timer_callback)
 
         self.origin = None
         self.route = None
         self.completed = False
         self.robot_current_state = None
+        self.state = 'idle'
 
         # Declare parameters
         self.declare_parameter('method', 'default')
@@ -61,18 +64,17 @@ class Navigate(Node):
 
         mask = (1 << n) - 1 # [1, 1, 1, ..., 1]
         last = np.argmin(dp[:, mask]) # the last point
-        path = [last]
+        path = deque([last])
 
         # backtracking
         while mask != 1:
             for i in range(n):
                 if mask & (1 << i) and dp[last][mask] == dp[i][mask ^ (1 << last)] + dist[i][last]:
-                    path.append(i)
+                    path.appendleft(i)
                     mask ^= (1 << last)
                     last = i
                     break
 
-        path.reverse()
         return path
     
     def _nearest_neighbor(self, points):
@@ -110,6 +112,7 @@ class Navigate(Node):
 
             route_idx = self.find_route(points, method=self.method)
             self.route = [points[i] for i in route_idx]
+            self.route = deque(self.route)
             print("Route: ", self.route)
 
         if len(unvisited_targets) == 0 and not self.completed:
@@ -119,43 +122,49 @@ class Navigate(Node):
 
         if self.route is not None and not self.completed:
             if len(unvisited_targets) < len(self.route):
-                self.route.pop(0)
+                self.route.popleft()
                 self.get_logger().info('Next target: {}'.format(self.route[0]))
 
 
-    def evaluate_action(self):
-        if self.route is not None and self.robot_current_state is not None:
-            target = self.route[0]
+    def timer_callback(self):
+        if not self.route or self.robot_current_state is None:
+            return
+        
+        if self.state == 'idle':
+            self.target = self.route[0]
+            self.state = 'rotate'            
+        
+        elif self.state == 'rotate':
             x, y, theta = self.robot_current_state
-            target_x, target_y = target
-
-            distance = np.sqrt((target_x - x) ** 2 + (target_y - y) ** 2)
-            angle = np.arctan2(target_y - y, target_x - x)
-
-            t1 = angle - theta
-            t2 = t1 + 2 * np.pi if t1 < 0 else t1 - 2 * np.pi
-            angle_diff = t1 if abs(t1) < abs(t2) else t2
-
-            if abs(angle_diff) < self.theta_tolerance:
-                robot_action = RobotAction.MOVE
-                value = distance
+            angle = np.arctan2(self.target[1] - y, self.target[0] - x)
+            
+            route1 = angle - theta
+            route2 = route1 + np.pi * 2 if route1 < 0 else route1 - np.pi * 2
+            
+            angle = route1 if abs(route1) < abs(route2) else route2
+            
+            if abs(angle) < 0.001:
+                self.cmd_vel_pub.publish(Twist())
+                self.state = 'move'
             else:
-                robot_action = RobotAction.ROTATE
-                value = angle_diff # choose the direction with the smallest angle
-
-            return robot_action, value
-
-    def run(self):
-        if self.route is not None and self.robot_current_state is not None and not self.completed:
-            action, value = self.evaluate_action()
-            if action == RobotAction.ROTATE:
-                twist = Twist()
-                twist.angular.z = value
-                self.cmd_vel_pub.publish(twist)
-            elif action == RobotAction.MOVE:
-                twist = Twist()
-                twist.linear.x = value
-                self.cmd_vel_pub.publish(twist)
+                msg = Twist()
+                msg.angular.z = angle
+                self.cmd_vel_pub.publish(msg)
+        
+        elif self.state == 'move':
+            x, y, theta = self.robot_current_state
+            self.distance = np.sqrt((self.target[0] - x) ** 2 + (self.target[1] - y) ** 2)
+            
+            if self.distance < 0.1:
+                self.cmd_vel_pub.publish(Twist())
+                self.state = 'idle'
+                self.target = None
+                self.distance = 0
+                self.dist_left = None
+            else:
+                msg = Twist()
+                msg.linear.x = self.distance
+                self.cmd_vel_pub.publish(msg)
 
 
     def stop(self):
